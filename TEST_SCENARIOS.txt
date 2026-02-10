@@ -1,0 +1,299 @@
+# Real Estate Chatbot - Test Scenarios
+# Copy and paste these messages into the chatbot to test all features
+
+## BUDGET EXTRACTION TESTS
+
+### Simple Budget Amounts
+1. "I want an apartment for 5M"
+2. "My budget is 8 million"
+3. "3500000 EGP"
+4. "around 6M"
+5. "about 4.5 million"
+6. "~7M"
+7. "approximately 10M"
+
+### Budget Ranges
+8. "between 3M and 5M"
+9. "from 4 million to 7 million"
+10. "3M to 6M"
+11. "4-8M"
+12. "5M-10M"
+
+### Maximum Budget
+13. "up to 5M"
+14. "not more than 6 million"
+15. "no more than 4M"
+16. "at most 8M"
+17. "less than 10M"
+
+### Minimum Budget
+18. "starting from 3M"
+19. "from 4 million"
+20. "at least 5M"
+21. "minimum 6M"
+22. "more than 2M"
+
+---
+
+## AREA EXTRACTION TESTS
+
+### Simple Area Amounts
+23. "120 sqm"
+24. "150 m2"
+25. "200 square meters"
+26. "180 m²"
+
+### Approximate Area
+27. "around 130 sqm"
+28. "about 140 m2"
+29. "approximately 160 m²"
+
+### Area Ranges
+30. "between 100 and 150 sqm"
+31. "from 120 to 180 m2"
+32. "100-150 square meters"
+33. "130-170 m2"
+
+### Maximum Area
+34. "up to 150 sqm"
+35. "max 140 sqm"
+36. "less than 150 sqm"
+37. "below 180 m2"
+
+### Minimum Area
+38. "starting from 120 sqm"
+39. "at least 160 sqm"
+40. "minimum 180 m²"
+41. "more than 130 m2"
+
+---
+
+## LOCATION EXTRACTION TESTS
+
+### Main Areas
+42. "New Cairo"
+43. "Sheikh Zayed"
+44. "Zayed"
+45. "North Coast"
+46. "6th of October"
+47. "New Capital"
+
+### Compounds
+48. "Marassi"
+49. "Hacienda"
+50. "Mountain View"
+51. "Palm Hills"
+52. "Katameya Heights"
+53. "Madinaty"
+54. "Hyde Park"
+55. "Taj City"
+
+### Districts
+56. "Tagamo3"
+57. "Rehab"
+58. "Madinet Nasr"
+59. "Nasr City"
+60. "Heliopolis"
+61. "Maadi"
+62. "Mokattam"
+
+### Directional Phrases
+63. "in New Cairo"
+64. "at Sheikh Zayed"
+65. "near Marassi"
+66. "close to Mountain View"
+67. "located in Rehab"
+
+### Multi-Location
+68. "New Cairo or Zayed"
+69. "preferably North Coast but open to Ain Sokhna"
+70. "Tagamo3 or Rehab"
+
+---
+
+## UNIT TYPE EXTRACTION TESTS
+
+### Basic Units
+71. "apartment"
+72. "villa"
+73. "studio"
+74. "duplex"
+75. "penthouse"
+76. "chalet"
+
+### With Bedrooms
+77. "2 bedroom apartment"
+78. "3 bedroom villa"
+79. "4 bedroom penthouse"
+80. "2-bed apartment"
+81. "3br apartment"
+
+### Floor Types
+82. "ground floor apartment"
+83. "first floor unit"
+84. "high floor penthouse"
+85. "top floor apartment"
+
+### Features - Outdoor
+86. "apartment with garden"
+87. "villa with roof"
+88. "penthouse with terrace"
+89. "apartment with balcony"
+
+### Features - Views
+90. "apartment with sea view"
+91. "villa with garden view"
+92. "apartment with pool view"
+
+### Features - Position
+93. "corner apartment"
+94. "end unit"
+
+### Features - Furnishing
+95. "furnished apartment"
+96. "semi-furnished villa"
+97. "unfurnished apartment"
+
+### Size Modifiers
+98. "small studio"
+99. "large villa"
+100. "spacious villa"
+
+---
+
+## INTENT DETECTION TESTS
+
+### Comparison
+101. "compare option 1 and 3"
+102. "compare 1 and 2"
+103. "difference between first and second"
+104. "option 1 vs option 2"
+105. "which is better"
+
+### Show Details
+106. "tell me more"
+107. "more info"
+108. "details about option 2"
+109. "what are the amenities"
+110. "describe option 1"
+
+### Filter
+111. "only show apartments"
+112. "remove villas"
+113. "exclude apartments"
+114. "filter by price"
+115. "just show me studios"
+
+### Sort
+116. "sort by price"
+117. "cheapest first"
+118. "most expensive first"
+119. "newest first"
+120. "order by date"
+
+### Navigation
+121. "next"
+122. "previous"
+123. "show more"
+124. "go back"
+125. "page 2"
+
+### Confirm/Book
+126. "I want option 1"
+127. "book option 2"
+128. "reserve this one"
+129. "I'm interested in option 2"
+130. "contact me about option 2"
+
+### Refine
+131. "cheaper"
+132. "bigger"
+133. "cheaper options"
+134. "change budget"
+
+### Restart
+135. "restart"
+136. "start over"
+137. "reset"
+
+---
+
+## COMPLEX INTEGRATION TESTS
+
+### Complete Search Queries
+138. "3 bedroom apartment with garden in New Cairo around 8M"
+139. "large 5 bedroom villa between 10M and 15M in Sheikh Zayed with pool view"
+140. "small furnished studio up to 3M in Tagamo3 with balcony"
+141. "penthouse with roof terrace 200-250 sqm in Marassi around 12M"
+142. "ground floor 2 bedroom apartment at least 5M in Rehab"
+
+### Multi-Feature Queries
+143. "spacious duplex with garden view unfurnished between 7M-9M in Madinaty"
+144. "chalet with sea view up to 4M in North Coast or Ras El Hekma"
+145. "3 bedroom townhouse minimum 180 sqm starting from 6M in Palm Hills"
+146. "corner apartment with 2 bedrooms and balcony in Eastown around 6M"
+147. "high floor penthouse with roof not more than 15M in Uptown Cairo"
+
+### Change Requests
+148. "change location to Katameya Heights and show me 4 bedroom villas"
+149. "2 bedroom apartment from 5M to 7M in Hyde Park"
+150. "I want to book option 2"
+
+---
+
+## EDGE CASES & TYPO TESTS
+
+### Location Typos
+151. "New Caior" (should match New Cairo)
+152. "Zayad" (should match Zayed)
+153. "Marasi" (should match Marassi)
+154. "Rehad" (should match Rehab)
+
+### Mixed Case
+155. "APARTMENT IN NEW CAIRO"
+156. "Villa in Sheikh Zayed"
+157. "Studio In TAGAMO3"
+
+### Arabic Words (if supported)
+158. "شقة في القاهرة الجديدة"
+159. "فيلا في الشيخ زايد"
+
+---
+
+## CONVERSATION FLOW TESTS
+
+### Multi-Turn Conversation
+160. "I'm looking for an apartment"
+161. "In New Cairo"
+162. "Around 8 million"
+163. "Show me 2 bedroom options"
+164. "Compare option 1 and 2"
+165. "Tell me more about the first one"
+166. "I want to book option 1"
+
+### Refinement Flow
+167. "Show me villas in Zayed"
+168. "Cheaper options"
+169. "Only show me 4 bedroom ones"
+170. "Sort by price"
+171. "Show more results"
+
+---
+
+Total: 171 test scenarios
+
+## NOTES FOR TESTING
+
+1. Type each message exactly as written
+2. Check that the bot extracts:
+   - Unit type correctly
+   - Location correctly
+   - Budget (min/max when applicable)
+   - Area (min/max when applicable)
+   - Bedrooms
+   - Features (garden, view, furnishing, etc.)
+   - Intent (search, compare, filter, etc.)
+
+3. The bot should respond appropriately based on the intent detected
+4. Missing information should trigger follow-up questions
+5. Complete searches should return matching results

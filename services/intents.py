@@ -8,3 +8,9 @@ class Intent(str, Enum):
     REFINE_SEARCH = "refine_search"
     CONFIRM_CHOICE = "confirm_choice"
     UNKNOWN = "unknown"
+    # Enhanced intents
+    COMPARE = "compare"
+    SHOW_DETAILS = "show_details"
+    FILTER_RESULTS = "filter_results"
+    SORT_RESULTS = "sort_results"
+    NAVIGATE = "navigate"
