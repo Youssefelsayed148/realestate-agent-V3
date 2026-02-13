@@ -22,3 +22,6 @@ tenacity>=8.2.3
 openai>=2.0.0
 sentence-transformers>=2.6.0
 torch>=2.0.0
+
+sendgrid>=6.12.5
+

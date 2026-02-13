@@ -386,8 +386,12 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         return {"conversation_id": str(conv.id), "reply": reply, "intent": "unit_query", "state": state}
 
     # B) Compare (UPDATED)
-        if _is_compare(user_message):
-            ids: List[int] = _extract_ids(user_message)
+            # ---------------------------------------------------------
+    # ✅ EARLY COMPARE (before parsing/refine/search)
+    # This prevents "between 1 and 3" from being treated as filters.
+    # ---------------------------------------------------------
+    if _is_compare(user_message):
+        ids: List[int] = _extract_ids(user_message)
 
         remembered_raw = state.get("last_project_ids") or []
         remembered: List[int] = []
@@ -395,54 +399,42 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             if isinstance(x, int) or str(x).isdigit():
                 remembered.append(int(x))
 
-        # 1) Map option indexes (works for: "compare 1 and 2" AND "between 1 and 2")
         ids = _maybe_map_option_indexes(user_message, ids, remembered)
 
-        # 2) If still not enough IDs, try parsing project names
         if len(ids) < 2:
             name_parts = _split_compare_names(user_message)
 
-            # NEW: support "between A and B" (names)
+            # support "between A and B"
             if not name_parts:
-                t = (user_message or "").strip()
-                m = re.search(r"\bbetween\b\s+(.*)\s+\band\b\s+(.*)$", t, flags=re.IGNORECASE)
+                m = re.search(r"\bbetween\b\s+(.*)\s+\band\b\s+(.*)$", user_message, flags=re.IGNORECASE)
                 if m:
                     a = m.group(1).strip(" -,\n\t")
                     b = m.group(2).strip(" -,\n\t")
                     if a and b:
                         name_parts = [a, b]
 
-            # If still no names, fall back to remembered projects
             if not name_parts:
                 if len(remembered) >= 2:
-                    ids = remembered[:]  # compare last shown projects in order
+                    ids = remembered[:]
                 else:
                     reply = (
                         "Tell me the two project names (or pick from the last results).\n"
-                        "Examples:\n"
-                        "- 'Compare Bloomfields vs Village West'\n"
-                        "- 'Between 1 and 2'\n"
-                        "- 'Compare 1 and 2'"
+                        "Examples: 'Compare 1 and 3' or 'Between Bloomfields and Village West'."
                     )
                     return {"conversation_id": str(conv.id), "reply": reply, "intent": "compare", "state": state}
 
-            # Resolve by name if provided
             if name_parts and len(ids) < 2:
                 resolved: List[int] = []
-                for name in name_parts[:2]:  # we only need two
+                for name in name_parts[:2]:
                     ranked = search_projects_ranked(db, name, limit=8)
                     if ranked:
                         resolved.append(int(ranked[0][0].id))
                 ids = resolved
 
-        # 3) Safety net: map again if user gave indexes and remembered exists
-        if len(ids) >= 2 and len(remembered) >= 2:
-            ids = _maybe_map_option_indexes(user_message, ids, remembered)
-
         if len(ids) < 2:
             reply = (
                 "I couldn’t resolve two projects. "
-                "Try: 'Compare <project A> vs <project B>' or 'Between 1 and 2' from the last results."
+                "Try: 'Compare <project A> vs <project B>' or 'Compare 1 and 3'."
             )
             return {"conversation_id": str(conv.id), "reply": reply, "intent": "compare", "state": state}
 
@@ -455,7 +447,6 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         reply = format_compare_summary(result)
         projects_ui = compact_projects_for_ui(projects, max_lines=4)
 
-        # memory: save compared projects
         conv = update_conversation_state(db, conv, {"last_project_ids": [int(p["id"]) for p in projects]})
         state = conv.state or {}
 
@@ -467,6 +458,7 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             "projects": projects_ui,
             "state": state,
         }
+
 
     # C) Details (only if user explicitly asks for details)
     if _looks_like_details_request(user_message):

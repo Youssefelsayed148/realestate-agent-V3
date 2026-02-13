@@ -64,5 +64,7 @@ def format_selected(result: dict[str, Any], idx_1_based: int) -> str:
         f"- Location: {result.get('location')}\n"
         f"- Unit type: {result.get('unit_type')}\n"
         f"- Area: {result.get('area')} m²\n"
-        f"- Price: {result.get('price'):,} EGP"
+        f"- Price: {result.get('price'):,} EGP\n\n"
+        "If you want, I can arrange a viewing. Tell me if you prefer an **office visit** or a **unit visit**, "
+        "and I’ll collect your name, phone, and email."
     )

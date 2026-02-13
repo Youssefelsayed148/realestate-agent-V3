@@ -17,22 +17,21 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: str
     reply: str
+    intent: str | None = None
+    selected: dict | None = None
+    state: dict | None = None
 
 @router.post("", response_model=ChatResponse)
 def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
-    # We keep your existing service API that expects a dict payload
-    result = handle_chat_message(
-        db=db,
-        payload=payload.model_dump()
-    )
+    result = handle_chat_message(db=db, payload=payload.model_dump())
 
-    # Expecting your service to return {"conversation_id": "...", "reply": "..."}
-    # If it already does, perfect. If not, we normalize below to avoid frontend breakage.
-    conv_id = result.get("conversation_id") or payload.conversation_id
+    conv_id = result.get("conversation_id") or payload.conversation_id or "unknown"
     reply = result.get("reply") or result.get("message") or str(result)
 
-    if not conv_id:
-        # last resort: avoid returning null conversation_id to frontend
-        conv_id = "unknown"
-
-    return ChatResponse(conversation_id=conv_id, reply=reply)
+    return ChatResponse(
+        conversation_id=conv_id,
+        reply=reply,
+        intent=result.get("intent"),
+        selected=result.get("selected"),
+        state=result.get("state"),
+    )
