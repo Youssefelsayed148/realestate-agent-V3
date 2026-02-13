@@ -131,6 +131,24 @@ def _norm_name(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
+def _maybe_map_option_indexes(user_text: str, ids: List[int], remembered: List[int]) -> List[int]:
+    """
+    If user says 'compare 1 and 2' and we have remembered IDs,
+    treat numbers as option indexes (1-based) when they fit.
+    """
+    if not remembered or len(ids) < 2:
+        return ids
+
+    t = user_text.lower()
+    looks_like_option_compare = ("compare" in t) or ("between" in t) or (" vs " in t) or ("versus" in t)
+
+    # If all numbers are within 1..len(remembered), map them as indexes
+    if looks_like_option_compare and all(1 <= x <= len(remembered) for x in ids[:4]):
+        return [remembered[x - 1] for x in ids[:4]]
+
+    return ids
+
+
 # -----------------------
 # Main endpoint
 # -----------------------
@@ -194,17 +212,22 @@ def chat(payload: ChatIn, db: Session = Depends(get_db)):
     # COMPARE
     # -----------------------
     if _is_compare(user_text):
-        ids = _extract_ids(user_text)
+        ids: List[int] = _extract_ids(user_text)
+
+        remembered = get_last_project_ids(db, cid)
+        ids = _maybe_map_option_indexes(user_text, ids, remembered)
 
         if len(ids) < 2:
             name_parts = _split_compare_names(user_text)
 
             if not name_parts:
-                remembered = get_last_project_ids(db, cid)
                 if len(remembered) >= 2:
                     ids = remembered[:]
                 else:
-                    reply = "Tell me the two project names (or IDs) you want to compare. Example: 'Compare AZHA North Coast vs Hyde Park North coast'."
+                    reply = (
+                        "Tell me the two project names (or pick from the last results). "
+                        "Example: 'Compare Bloomfields vs Village West' or 'Compare 1 and 2'."
+                    )
                     db.add(RagMessage(conversation_id=cid, role="assistant", content=reply, intent="compare"))
                     db.commit()
                     return {"conversation_id": str(cid), "reply": reply}
@@ -214,13 +237,18 @@ def chat(payload: ChatIn, db: Session = Depends(get_db)):
                 for name in name_parts[:3]:
                     ranked = search_projects_ranked(db, name, limit=8)
                     if ranked:
-                        # NOTE: compare-mode can also face duplicates,
-                        # but for now we pick top. We can add disambiguation later.
                         resolved.append(int(ranked[0][0].id))
                 ids = resolved
 
+        # safety net: map again if they were indexes
+        if len(ids) >= 2 and len(remembered) >= 2:
+            ids = _maybe_map_option_indexes(user_text, ids, remembered)
+
         if len(ids) < 2:
-            reply = "I couldn’t resolve two projects. Please provide two project IDs, or use: 'Compare <project A> vs <project B>'."
+            reply = (
+                "I couldn’t resolve two projects. "
+                "Try: 'Compare <project A> vs <project B>' or 'Compare 1 and 2' from the last results."
+            )
             db.add(RagMessage(conversation_id=cid, role="assistant", content=reply, intent="compare"))
             db.commit()
             return {"conversation_id": str(cid), "reply": reply}

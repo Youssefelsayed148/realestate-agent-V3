@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Any
 
+
 def _to_float(v: Any) -> float | None:
     if v is None:
         return None
@@ -9,6 +10,7 @@ def _to_float(v: Any) -> float | None:
         return float(v)
     except (TypeError, ValueError):
         return None
+
 
 def _to_int(v: Any) -> int | None:
     if v is None:
@@ -19,12 +21,20 @@ def _to_int(v: Any) -> int | None:
     except (TypeError, ValueError):
         return None
 
+
 def format_results(results: list[dict[str, Any]]) -> str:
     if not results:
-        return "I couldn’t find matches with the current filters. Want to relax the budget or change the location/unit type?"
+        return (
+            "I couldn’t find matches with the current filters. "
+            "Want to relax the budget or change the location/unit type?"
+        )
 
     lines: list[str] = ["Here are the best matches I found:"]
-    for i, r in enumerate(results, start=1):
+
+    seen_project_ids: set[int] = set()
+    shown_idx = 0
+
+    for r in results:
         project = str(r.get("project_name") or "Unknown Project")
         location = str(r.get("location") or "Unknown Location")
         unit_type = str(r.get("unit_type") or "Unknown Unit")
@@ -35,9 +45,24 @@ def format_results(results: list[dict[str, Any]]) -> str:
         area_txt = f"{area_val:.0f} m²" if area_val is not None else "N/A m²"
         price_txt = f"{price_val:,} EGP" if price_val is not None else "N/A EGP"
 
-        lines.append(f"{i}) {project} ({location}) — {unit_type} — {area_txt} — {price_txt}")
+        project_id_raw = r.get("project_id")
+        project_id = int(project_id_raw) if project_id_raw is not None else None
+
+        # Optional: prevent duplicate projects in display (only if project_id exists)
+        if project_id is not None:
+            if project_id in seen_project_ids:
+                continue
+            seen_project_ids.add(project_id)
+
+        shown_idx += 1
+        id_txt = f"  [ID: {project_id}]" if project_id is not None else ""
+
+        lines.append(
+            f"{shown_idx}) {project} ({location}) — {unit_type} — {area_txt} — {price_txt}{id_txt}"
+        )
 
     return "\n".join(lines)
+
 
 def slim_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
@@ -45,12 +70,14 @@ def slim_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     out: list[dict[str, Any]] = []
     for r in results:
-        out.append({
-            "project_id": r.get("project_id"),
-            "project_name": r.get("project_name"),
-            "location": r.get("location"),
-            "unit_type": r.get("unit_type"),
-            "area": _to_float(r.get("unit_area")),
-            "price": _to_int(r.get("unit_price")),
-        })
+        out.append(
+            {
+                "project_id": r.get("project_id"),
+                "project_name": r.get("project_name"),
+                "location": r.get("location"),
+                "unit_type": r.get("unit_type"),
+                "area": _to_float(r.get("unit_area")),
+                "price": _to_int(r.get("unit_price")),
+            }
+        )
     return out

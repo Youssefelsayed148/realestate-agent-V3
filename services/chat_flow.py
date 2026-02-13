@@ -1,7 +1,6 @@
 # services/chat_flow.py
 from __future__ import annotations
 import os
-
 import re
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
@@ -61,7 +60,22 @@ def _extract_ids(text: str) -> List[int]:
 
 def _is_compare(text: str) -> bool:
     t = (text or "").lower()
-    return ("compare" in t) or (" vs " in t) or ("difference" in t) or ("versus" in t)
+
+    # existing triggers
+    if ("compare" in t) or (" vs " in t) or ("difference" in t) or ("versus" in t):
+        return True
+
+    # NEW: "between X and Y" pattern (numbers)
+    # examples: "between 1 and 2", "between 3 and 5"
+    if "between" in t and re.search(r"\bbetween\b.*\b\d+\b.*\band\b.*\b\d+\b", t):
+        return True
+
+    # OPTIONAL (still cheap): "between A and B" (names)
+    # This helps: "between Bloomfields and Village West"
+    if "between" in t and " and " in t:
+        return True
+
+    return False
 
 
 def _split_compare_names(text: str) -> List[str]:
@@ -158,6 +172,24 @@ def _looks_like_details_request(text: str) -> bool:
     return any(x in t for x in triggers)
 
 
+def _maybe_map_option_indexes(user_text: str, ids: List[int], remembered: List[int]) -> List[int]:
+    """
+    If user says 'compare 1 and 2' and we have remembered IDs in display order,
+    treat numbers as option indexes (1-based) when they fit.
+    """
+    if not remembered or len(ids) < 2:
+        return ids
+
+    t = (user_text or "").lower()
+    looks_like_option_compare = ("compare" in t) or ("between" in t) or (" vs " in t) or ("versus" in t)
+
+    # If all numbers are within 1..len(remembered), map them as indexes
+    if looks_like_option_compare and all(1 <= x <= len(remembered) for x in ids[:4]):
+        return [int(remembered[x - 1]) for x in ids[:4]]
+
+    return ids
+
+
 # ----------------------------
 # Search response (existing)
 # ----------------------------
@@ -175,7 +207,7 @@ def _search_and_respond(db: Session, conv, state: dict[str, Any]) -> dict[str, A
 
     slim = slim_results(results)
 
-    # --- NEW: store last_project_ids for "compare them" / "cheapest" follow-ups ---
+    # --- store last_project_ids for "compare 1 and 2" / "compare them" / "cheapest" follow-ups ---
     seen: set[int] = set()
     last_project_ids: list[int] = []
     for r in slim:
@@ -195,7 +227,7 @@ def _search_and_respond(db: Session, conv, state: dict[str, Any]) -> dict[str, A
         conv,
         {
             "last_results": slim,
-            "last_project_ids": last_project_ids,  # ✅ new memory
+            "last_project_ids": last_project_ids,
         },
     )
 
@@ -227,22 +259,17 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     if "last_project_ids" not in state:
         conv = update_conversation_state(db, conv, {"last_project_ids": []})
         state = conv.state or {}
-        # ✅ EARLY deterministic parse BEFORE refine/missing-slot checks
-    # This prevents refine() (triggered by words like "under") from hijacking the flow
-    # and asking redundant questions (e.g., asking location even when user included it).
+
+    # ✅ EARLY deterministic parse BEFORE refine/missing-slot checks
     early_patch = extract_state_patch(user_message) or {}
     if early_patch:
         early_patch.setdefault("confirmed", False)
         early_patch.setdefault("chosen_option", None)
         conv = update_conversation_state(db, conv, early_patch)
         state = conv.state or {}
-    
 
     # =========================================================
     # ✅ 0.5) EARLY deterministic parse (BEFORE refine + missing checks)
-    # This prevents refine() from stealing the flow and causing
-    # redundant questions like "Which location..." even when user
-    # already said "New Cairo".
     # =========================================================
     early_patch = extract_state_patch(user_message) or {}
     if early_patch:
@@ -260,7 +287,11 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             chosen_pid = chosen.get("project_id")
 
             # bump chosen project to the front of last_project_ids
-            last_pids = [int(x) for x in (state.get("last_project_ids") or []) if isinstance(x, int) or str(x).isdigit()]
+            last_pids = [
+                int(x)
+                for x in (state.get("last_project_ids") or [])
+                if isinstance(x, int) or str(x).isdigit()
+            ]
             if chosen_pid is not None:
                 try:
                     pid_int = int(chosen_pid)
@@ -294,8 +325,6 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     # 1) Refinement patch (reset / cheaper / bigger / change location, etc.)
-    # NOTE: we already applied early_patch above, so "under 10 million"
-    # won't cause location to be missing if it was in the message.
     refine_patch = build_refine_patch(user_message, state)
     if refine_patch:
         did_reset = bool(refine_patch.pop("__did_reset__", False))
@@ -356,34 +385,65 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         )
         return {"conversation_id": str(conv.id), "reply": reply, "intent": "unit_query", "state": state}
 
-    # B) Compare
-    if _is_compare(user_message):
-        ids = _extract_ids(user_message)
+    # B) Compare (UPDATED)
+        if _is_compare(user_message):
+            ids: List[int] = _extract_ids(user_message)
 
+        remembered_raw = state.get("last_project_ids") or []
+        remembered: List[int] = []
+        for x in remembered_raw:
+            if isinstance(x, int) or str(x).isdigit():
+                remembered.append(int(x))
+
+        # 1) Map option indexes (works for: "compare 1 and 2" AND "between 1 and 2")
+        ids = _maybe_map_option_indexes(user_message, ids, remembered)
+
+        # 2) If still not enough IDs, try parsing project names
         if len(ids) < 2:
             name_parts = _split_compare_names(user_message)
 
+            # NEW: support "between A and B" (names)
             if not name_parts:
-                remembered = state.get("last_project_ids") or []
+                t = (user_message or "").strip()
+                m = re.search(r"\bbetween\b\s+(.*)\s+\band\b\s+(.*)$", t, flags=re.IGNORECASE)
+                if m:
+                    a = m.group(1).strip(" -,\n\t")
+                    b = m.group(2).strip(" -,\n\t")
+                    if a and b:
+                        name_parts = [a, b]
+
+            # If still no names, fall back to remembered projects
+            if not name_parts:
                 if len(remembered) >= 2:
-                    ids = [int(x) for x in remembered[:2] if isinstance(x, int) or str(x).isdigit()]
+                    ids = remembered[:]  # compare last shown projects in order
                 else:
                     reply = (
-                        "Tell me the two project names (or IDs) you want to compare.\n"
-                        "Example: 'Compare AZHA North Coast vs Hyde Park North coast'."
+                        "Tell me the two project names (or pick from the last results).\n"
+                        "Examples:\n"
+                        "- 'Compare Bloomfields vs Village West'\n"
+                        "- 'Between 1 and 2'\n"
+                        "- 'Compare 1 and 2'"
                     )
                     return {"conversation_id": str(conv.id), "reply": reply, "intent": "compare", "state": state}
 
+            # Resolve by name if provided
             if name_parts and len(ids) < 2:
                 resolved: List[int] = []
-                for name in name_parts[:3]:
+                for name in name_parts[:2]:  # we only need two
                     ranked = search_projects_ranked(db, name, limit=8)
                     if ranked:
                         resolved.append(int(ranked[0][0].id))
                 ids = resolved
 
+        # 3) Safety net: map again if user gave indexes and remembered exists
+        if len(ids) >= 2 and len(remembered) >= 2:
+            ids = _maybe_map_option_indexes(user_message, ids, remembered)
+
         if len(ids) < 2:
-            reply = "I couldn’t resolve two projects. Please provide two project IDs, or use: 'Compare <project A> vs <project B>'."
+            reply = (
+                "I couldn’t resolve two projects. "
+                "Try: 'Compare <project A> vs <project B>' or 'Between 1 and 2' from the last results."
+            )
             return {"conversation_id": str(conv.id), "reply": reply, "intent": "compare", "state": state}
 
         projects = get_projects_with_units(db, ids[:4])
@@ -395,7 +455,7 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         reply = format_compare_summary(result)
         projects_ui = compact_projects_for_ui(projects, max_lines=4)
 
-        # memory
+        # memory: save compared projects
         conv = update_conversation_state(db, conv, {"last_project_ids": [int(p["id"]) for p in projects]})
         state = conv.state or {}
 
