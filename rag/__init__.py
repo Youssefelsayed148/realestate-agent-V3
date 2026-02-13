@@ -1,6 +1,6 @@
 # rag/__init__.py
 from .state_manager import StateManager, StateUpdate
-from .intent_router import OllamaIntentRouter
+from .intent_router_flow import OllamaIntentRouter
 from .orchestrator import ChatOrchestrator
 
 __all__ = [

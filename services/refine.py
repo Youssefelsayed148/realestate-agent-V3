@@ -38,10 +38,7 @@ def _title_case_location(s: str) -> str:
     s = (s or "").strip()
     return " ".join(w.capitalize() for w in s.split())
 
-def _normalize_location(loc: str) -> str:
-    if loc.strip().lower() == "zayed":
-        return "Zayed"
-    return _title_case_location(loc)
+
 
 def _best_location_match(user_text: str) -> str | None:
     t = _normalize_text(user_text)
@@ -93,6 +90,8 @@ def build_refine_patch(message: str, state: dict[str, Any]) -> dict[str, Any]:
             "confirmed": False,
             "chosen_option": None,
             "last_results": [],
+            # ✅ NEW: reset memory used by compare/details/cheapest/largest
+            "last_project_ids": [],
             "__did_reset__": True,
         }
 
@@ -150,3 +149,11 @@ def build_refine_patch(message: str, state: dict[str, Any]) -> dict[str, Any]:
         return {}
 
     return {}
+def _normalize_location(loc: str) -> str:
+    loc = (loc or "").strip()
+    # If contains Arabic letters, keep as-is (don’t Title Case Arabic)
+    if re.search(r"[\u0600-\u06FF]", loc):
+        return loc
+    if loc.lower() == "zayed":
+        return "Zayed"
+    return _title_case_location(loc)

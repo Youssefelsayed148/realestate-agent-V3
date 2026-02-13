@@ -19,7 +19,10 @@ DEFAULT_STATE: dict[str, Any] = {
     "confirmed": False,
     "chosen_option": None,
     "last_results": [],
+    # ✅ NEW: memory for compare/details/cheapest/largest follow-ups
+    "last_project_ids": [],
 }
+
 
 def merge_state(old: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """
@@ -45,6 +48,7 @@ def merge_state(old: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
         new_state[k] = v
 
     return new_state
+
 
 def get_or_create_conversation(
     db: Session,
@@ -88,6 +92,7 @@ def get_or_create_conversation(
         db.refresh(conv)
 
     return conv
+
 
 def update_conversation_state(db: Session, conv: Conversation, patch: dict[str, Any]) -> Conversation:
     old_state = conv.state or {}

@@ -1,33 +1,57 @@
 # services/intent_rules.py
 from __future__ import annotations
-import re
 
+import re
 from .intents import Intent
 
-def detect_intent_rules(text: str) -> Intent | None:
-    t = (text or "").strip().lower()
 
-    # 1) RESTART intents
-    if any(x in t for x in ["restart", "start over", "reset", "new search", "from scratch", "begin again"]):
+# -----------------------------
+# Shared normalization
+# -----------------------------
+_ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+
+def _norm(text: str) -> str:
+    t = (text or "").strip().lower()
+    t = t.translate(_ARABIC_DIGITS)
+    t = re.sub(r"[^\w\s#\-]", " ", t, flags=re.UNICODE)  # keep words/#/-
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def detect_intent_rules(text: str) -> Intent | None:
+    t = _norm(text)
+
+    # 1) RESTART
+    if _contains_any(t, [
+        "restart", "reset", "start over", "new search", "from scratch", "begin again",
+        "clear all", "clear filters", "wipe",
+        # typos
+        "reastart", "restar", "restert", "re set", "re-set",
+        # arabic
+        "ابدأ من جديد", "ابدء من جديد", "ابدا من جديد",
+        "اعادة", "إعادة", "اعاده", "إعاده",
+        "امسح", "امسح الكل", "امسح الفلاتر",
+        "ريست", "ريستارت",
+    ]):
         return Intent.RESTART
 
-    # 2) COMPARISON intents
+    # 2) COMPARE
     if _is_comparison_intent(t):
         return Intent.COMPARE
 
-    # 3) CONFIRM / BOOK / CHOOSE (check early for contact/booking intents)
+    # 3) CONFIRM / BOOK / CHOOSE
     if _is_confirm_intent(t):
         return Intent.CONFIRM_CHOICE
-    
-    # Check standalone confirm
-    if t in ["confirm", "yes", "ok", "okay"]:
+
+    # Standalone confirm (English + Arabic)
+    if t in ["confirm", "yes", "ok", "okay", "تمام", "موافق", "اوكي", "أوكي", "ايوه", "نعم"]:
         return Intent.CONFIRM_CHOICE
 
-    # 4) DETAILS / MORE INFO (check before SHOW_RESULTS to catch "show me the details")
+    # 4) DETAILS
     if _is_details_intent(t):
         return Intent.SHOW_DETAILS
 
-    # 5) FILTER / REFINE (check before SHOW_RESULTS)
+    # 5) FILTER
     if _is_filter_intent(t):
         return Intent.FILTER_RESULTS
 
@@ -35,137 +59,174 @@ def detect_intent_rules(text: str) -> Intent | None:
     if _is_sort_intent(t):
         return Intent.SORT_RESULTS
 
-    # 7) NAVIGATION (next/previous/page)
+    # 7) NAVIGATION
     if _is_navigation_intent(t):
         return Intent.NAVIGATE
 
-    # 8) REFINE SEARCH (adjustments) - check before SHOW_RESULTS to catch words like "cheaper"
-    if any(x in t for x in ["bigger", "smaller", "cheaper", "more expensive", "increase", "decrease", "change budget", "adjust"]):
-        return Intent.REFINE_SEARCH
-    
-    # Check for refine patterns with "options" suffix
-    if re.search(r"\b(cheaper|lower price|reduce|better price|less expensive)\s*(?:options?)?\b", t):
+    # 8) REFINE SEARCH (cheap heuristics)
+    if _contains_any(t, [
+        "bigger", "larger", "more space", "bigger area",
+        "smaller", "less space", "smaller area",
+        "cheaper", "lower", "reduce", "decrease",
+        "more expensive", "increase", "raise", "higher budget",
+        "change budget", "adjust", "modify",
+        # arabic
+        "اكبر", "أكبر", "مساحة اكبر", "مساحة أكبر", "اوسع",
+        "اصغر", "أصغر", "مساحة اصغر", "مساحة أصغر",
+        "ارخص", "أرخص", "اقل", "أقل", "خفض", "قلل",
+        "اغلى", "أغلى", "زود", "زوّد", "ارفع",
+    ]):
         return Intent.REFINE_SEARCH
 
-    # 9) SHOW RESULTS / LIST (but not if it contains location/unit/bedroom info)
-    if any(x in t for x in ["show results", "list options", "what do you have", "what's available"]):
+    # 9) SHOW RESULTS / LIST
+    if _contains_any(t, [
+        "show results", "list options", "show options", "options",
+        "what do you have", "what's available", "available",
+        "show me options", "show me results", "give me options", "results",
+        # arabic
+        "النتايج", "النتائج", "عرض", "وريني", "وريني الاوبشنز", "وريني الخيارات",
+        "ايه المتاح", "ايه الموجود", "هات الخيارات", "الخيارات",
+    ]):
         return Intent.SHOW_RESULTS
-    
-    # Check for standalone "options"
-    if t == "options" or t == "show options":
-        return Intent.SHOW_RESULTS
-    
-    # Check for "show me" but exclude if it's a search query with parameters
-    if "show me" in t:
-        # If it has location, unit, or bedroom info, treat as search not show_results
-        has_unit = any(x in t for x in ["apartment", "villa", "townhouse", "duplex", "studio", "chalet"])
-        has_bedroom = bool(re.search(r"\b\d+\s*(?:bedroom|bed)", t))
-        has_location = any(x in t for x in ["new cairo", "mostakbal", "zayed", "north coast", "ain sokhna", "tagamoa", "marassi", "rehab", "katameya"])
-        
-        if not (has_unit or has_bedroom or has_location):
-            return Intent.SHOW_RESULTS
 
     # 10) PROVIDE PREFERENCES (default search)
-    has_money = bool(re.search(r"\b(\d{1,3}(,\d{3})+|\d+)(?:\s*m|million|m\b)?", t)) and any(
-        x in t for x in ["egp", "million", "m ", "budget", "price", "m$"]
-    )
-    # Also check for budget patterns like "5M budget" or "5 million"
-    has_budget_phrase = bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:m|million)\b", t)) and "budget" in t
-    has_area = any(x in t for x in ["m2", "sqm", "meter", "metre", "متر"]) or "m²" in t
-    has_unit = any(x in t for x in ["apartment", "villa", "townhouse", "duplex", "studio", "chalet"])
-    has_location = any(x in t for x in ["new cairo", "mostakbal", "zayed", "north coast", "ain sokhna", "tagamoa"])
-
-    if has_money or has_budget_phrase or has_area or has_unit or has_location:
+    # Detect any signal of search constraints: money/area/unit/location/bedrooms
+    if _has_search_signals(t):
         return Intent.PROVIDE_PREFERENCES
 
     return None
 
 
-def _is_comparison_intent(text: str) -> bool:
-    """Detect comparison patterns like 'compare 1 and 2', 'difference between first and second'"""
-    comparison_patterns = [
-        r"\bcompare\b.*\b(option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd)",
-        r"\bdifference\b.*\b(between|among)",
-        r"\bvs\b|\bversus\b",
-        r"\bwhich\s+(?:is\s+)?(?:better|best|cheaper|more expensive|bigger|smaller)",
-        r"\b(option|choice|#)?\s*(\d+|first|second|third)\s+(?:and|or|vs)\s+(option|choice|#)?\s*(\d+|first|second|third)",
-        r"\bwhich\s+one\s+(?:is\s+)?best\b",
+# -----------------------------
+# Helpers
+# -----------------------------
+def _contains_any(t: str, phrases: list[str]) -> bool:
+    for p in phrases:
+        if p and p in t:
+            return True
+    return False
+
+
+def _has_search_signals(t: str) -> bool:
+    # money
+    has_money = bool(re.search(r"\b(\d{1,3}(?:,\d{3})+|\d{5,9}|\d+(?:\.\d+)?)\b", t)) and _contains_any(
+        t,
+        ["egp", "budget", "price", "m", "million", "k", "thousand", "مليون", "م", "جنيه", "ميزانية", "سعر"]
+    )
+
+    # "5m budget" / "5 million"
+    has_million_word = bool(re.search(r"\b\d+(?:\.\d+)?\s*(m|million|مليون|م)\b", t))
+
+    # area/sqm
+    has_area = _contains_any(t, ["m2", "sqm", "meter", "metre", "متر", "م²", "مساحة"]) or bool(re.search(r"\b\d+\s*(m2|sqm|متر)\b", t))
+
+    # unit types (EN + AR + common typos)
+    has_unit = _contains_any(t, [
+        "apartment", "apt", "appartment", "flat",
+        "villa", "vila",
+        "townhouse", "town house",
+        "duplex", "duplx",
+        "studio",
+        "chalet", "shalet",
+        # arabic
+        "شقة", "شقه", "فيلا", "توين", "تاون", "دوبلكس", "استوديو", "شاليه",
+    ])
+
+    # bedrooms
+    has_bedroom = bool(re.search(r"\b\d+\s*(bed|beds|bedroom|bedrooms|غرفة|غرف)\b", t))
+
+    # location hint (keep broad; preference_parser/refine will normalize)
+    has_location = _contains_any(t, [
+        "new cairo", "tagamo", "tagamo3", "fifth settlement", "rehab", "katameya", "mostakbal", "shorouk",
+        "sheikh zayed", "zayed", "6 october", "october",
+        "north coast", "sahel", "ain sokhna", "sokhna", "ras el hekma", "sidi abdelrahman",
+        # arabic
+        "القاهرة الجديدة", "التجمع", "الرحاب", "مدينتي", "الشروق", "المستقبل",
+        "الشيخ زايد", "زايد", "اكتوبر", "٦ اكتوبر", "الساحل", "السخنة", "راس الحكمة", "سيدي عبدالرحمن",
+    ])
+
+    return has_money or has_million_word or has_area or has_unit or has_bedroom or has_location
+
+
+def _is_comparison_intent(t: str) -> bool:
+    # compare / vs / difference / Arabic equivalents
+    if _contains_any(t, ["compare", "vs", "versus", "difference", "diff", "قارن", "مقارنة", "الفرق", "فرق"]):
+        return True
+
+    # patterns: "1 vs 2", "option 1 and 2"
+    if re.search(r"\b(option|choice|#)?\s*\d+\s*(and|or|vs)\s*(option|choice|#)?\s*\d+\b", t):
+        return True
+
+    return False
+
+
+def _is_details_intent(t: str) -> bool:
+    return bool(re.search(
+        r"(\btell me more\b|\bmore (info|information|details)\b|\bdetails\b|\bdescribe\b|\bamenities\b|"
+        r"\bfeatures\b|\bpayment plan\b|\bdown payment\b|"
+        r"تفاصيل|معلومات|احكي|قولي|قوللي|وصف|مميزات|خطة سداد|تقسيط|مقدم)",
+        t
+    ))
+
+
+def _is_filter_intent(t: str) -> bool:
+    # Filter-like patterns in EN + AR
+    if _contains_any(t, ["only show", "just show", "remove", "exclude", "filter", "فلتر", "استبعد", "شيل", "اظهر بس", "بس"]):
+        return True
+
+    # explicit unit filters
+    if re.search(r"\b(only|just)\s+(apartments|villas|studios|duplexes|chalets|townhouses)\b", t):
+        return True
+
+    if re.search(r"(شقق|شقة|فلل|فيلا|شاليهات|شاليه|تاون|توين|دوبلكس|استوديو)\b", t) and _contains_any(t, ["بس", "فقط", "اظهر", "وريني"]):
+        return True
+
+    return False
+
+
+def _is_sort_intent(t: str) -> bool:
+    if _contains_any(t, [
+        "sort", "sorted", "order by", "cheapest", "most expensive",
+        "lowest price", "highest price", "smallest", "largest", "newest", "latest",
+        # arabic
+        "رتب", "ترتيب", "اقل سعر", "أقل سعر", "اغلى", "أغلى", "ارخص", "أرخص",
+        "من الاقل", "من الأرخص", "من الأغلى", "اكبر", "أكبر", "اصغر", "أصغر",
+    ]):
+        return True
+    return False
+
+
+def _is_navigation_intent(t: str) -> bool:
+    if _contains_any(t, [
+        "next", "next page", "more", "show more", "load more",
+        "previous", "prev", "back", "forward", "page",
+        # arabic
+        "التالي", "اللي بعده", "بعد كده", "اكتر", "المزيد",
+        "السابق", "قبل", "ارجع", "رجوع", "صفحة",
+    ]):
+        return True
+    return False
+
+
+def _is_confirm_intent(t: str) -> bool:
+    # English
+    patterns = [
+        r"\b(i\s+)?(want|choose|pick|select|like|prefer)\s+(the\s+)?(option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)\b",
+        r"\b(book|reserve|schedule|arrange)\s+(the\s+)?(option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)?\b",
+        r"\b(proceed with|confirm|finalize)\b",
+        r"\b(i'll take|i will take)\b",
+        r"\b(this one)\s+(is\s+)?(good|fine|ok|okay|perfect|great)\b",
     ]
-    return any(re.search(pattern, text) for pattern in comparison_patterns)
+    if any(re.search(p, t) for p in patterns):
+        return True
 
+    # Arabic confirm-ish
+    if _contains_any(t, [
+        "اختار", "اختار ده", "عايز ده", "عايز دي", "انا عايز", "انا عاوز",
+        "احجز", "حجز", "حجزلي", "احجزلي", "عايز احجز",
+        "تمام كده", "ده مناسب", "دي مناسبة", "ده كويس", "دي كويسة",
+        "أكد", "تأكيد", "موافق",
+    ]):
+        return True
 
-def _is_details_intent(text: str) -> bool:
-    """Detect detail request patterns like 'tell me more', 'what are amenities'"""
-    details_patterns = [
-        r"\btell\s+me\s+more\b",
-        r"\bmore\s+(?:info|information|details)\b",
-        r"\bdetails\s+(?:about|for|on)\b",
-        r"\bwhat\s+(?:are|is)\s+(?:the\s+)?(?:amenities|features|specs|specifications)",
-        r"\bshow\s+(?:me\s+)?(?:the\s+)?details\b",
-        r"\bdescribe\b",
-        r"\babout\s+(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third)",
-        r"\b(option|choice|#)?\s*(\d+|first|second|third)\s+details\b",
-    ]
-    return any(re.search(pattern, text) for pattern in details_patterns)
-
-
-def _is_filter_intent(text: str) -> bool:
-    """Detect filter patterns like 'only show apartments', 'remove villas'"""
-    filter_patterns = [
-        r"\bonly\s+(?:show\s+)?(?:me\s+)?(?:apartments|villas|studios|duplexes|chalets|townhouses)\b",
-        r"\b(show\s+)?only\s+(?:the\s+)?(?:apartments|villas|studios|duplexes|chalets|townhouses)\b",
-        r"\bremove\s+(?:the\s+)?(?:apartments|villas|studios|duplexes|chalets|townhouses)\b",
-        r"\bexclude\s+(?:the\s+)?(?:apartments|villas|studios|duplexes|chalets|townhouses)\b",
-        r"\bfilter\s+(?:by|for)\b",
-        r"\bjust\s+(?:show\s+)?(?:me\s+)?(?:apartments|villas|studios|duplexes|chalets|townhouses)\b",
-        r"\bshow\s+me\s+only\s+(?:the\s+)?(?:apartments|villas|studios|duplexes|chalets|townhouses)\b",
-    ]
-    return any(re.search(pattern, text) for pattern in filter_patterns)
-
-
-def _is_sort_intent(text: str) -> bool:
-    """Detect sort patterns like 'sort by price', 'cheapest first'"""
-    sort_patterns = [
-        r"\bsort\s+(?:by\s+)?(?:price|budget|area|size|date|newest|oldest|location)\b",
-        r"\bsorted\s+(?:by\s+)?(?:price|budget|area|size|date|newest|oldest|location)\b",
-        r"\bcheapest\s+(?:first|to|one)\b",
-        r"\bmost\s+expensive\s+(?:first|to|one)\b",
-        r"\blowest\s+(?:price|budget)\b",
-        r"\bhighest\s+(?:price|budget)\b",
-        r"\b(smallest|largest|biggest)\s+(?:first|to|one)\b",
-        r"\bnewest\s+(?:first|to|one)\b",
-        r"\blatest\s+(?:first|to|one)\b",
-        r"\bshow\s+(?:the\s+)?(?:cheapest|most expensive|smallest|largest|newest)\b",
-        r"\bby\s+(?:price|area|budget|size|date|location)\b",
-        r"\border\s+(?:by\s+)?(?:price|area|budget|size|date|location)\b",
-    ]
-    return any(re.search(pattern, text) for pattern in sort_patterns)
-
-
-def _is_navigation_intent(text: str) -> bool:
-    """Detect navigation patterns like 'next', 'previous', 'show more'"""
-    nav_patterns = [
-        r"\bnext\s*(?:page|results?)?\b",
-        r"\bprevious\s*(?:page|results?)?\b|\bprev\b",
-        r"\bshow\s+more\b|\bload\s+more\b",
-        r"\b(more\s+)?results?\b",
-        r"\bgo\s+(?:back|forward)\b",
-        r"\bpage\s*(\d+|one|two|three)\b",
-        r"\bfirst\s+page\b|\blast\s+page\b",
-    ]
-    return any(re.search(pattern, text) for pattern in nav_patterns)
-
-
-def _is_confirm_intent(text: str) -> bool:
-    """Detect confirmation patterns like 'book option 2', 'I want the first one'"""
-    confirm_patterns = [
-        r"\b(?:i\s+)?(?:want|choose|pick|select|like|prefer)\s+(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)\b",
-        r"\b(?:book|reserve|schedule|arrange)\s+(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)?\b",
-        r"\b(?:proceed\s+with|confirm|finalize)\s+(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)?\b",
-        r"\b(?:i'll\s+take|i\s+will\s+take)\s+(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)?\b",
-        r"\b(?:contact|call|reach|talk\s+to)\s+(?:me\s+about|regarding)?\s*(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)?\b",
-        r"\bsend\s+(?:me\s+)?(?:details|info|information)\s+(?:about|for|on|regarding)\s+(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd)\b",
-        r"\bi'm\s+interested\s+(?:in\s+)?(?:the\s+)?(?:option|choice|#)?\s*(\d+|first|second|third|1st|2nd|3rd|this|that)\b",
-        r"\bthis\s+one\s+(?:is\s+)?(?:good|fine|ok|okay|perfect|great)\b",
-    ]
-    return any(re.search(pattern, text) for pattern in confirm_patterns)
+    return False
