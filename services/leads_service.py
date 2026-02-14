@@ -1,12 +1,12 @@
 # services/leads_service.py
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from sqlalchemy.exc import IntegrityError
-import psycopg2
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models.rag_leads import RagLead
@@ -21,8 +21,16 @@ def _to_uuid_or_none(value: Optional[str]) -> Optional[uuid.UUID]:
     except ValueError:
         return None
 
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def create_lead_row(db: Session, data: Dict[str, Any]) -> RagLead:
-    def _make_lead(conversation_uuid):
+    """
+    Creates a lead row. If conversation_id FK fails, retry with NULL conversation_id.
+    """
+    def _make_lead(conversation_uuid: Optional[uuid.UUID]) -> RagLead:
         return RagLead(
             conversation_id=conversation_uuid,
             name=data.get("name"),
@@ -55,8 +63,8 @@ def create_lead_row(db: Session, data: Dict[str, Any]) -> RagLead:
     except IntegrityError as e:
         db.rollback()
 
-        # If FK fails because conversation_id doesn't exist -> retry with NULL conversation_id
         msg = str(e.orig) if getattr(e, "orig", None) else str(e)
+        # FK fails because conversation_id doesn't exist -> retry with NULL conversation_id
         if "rag_leads_conversation_id_fkey" in msg:
             lead = _make_lead(None)
             db.add(lead)
@@ -77,11 +85,16 @@ def update_lead_status(
     email_office_sent: bool = False,
     provider_message_id: Optional[str] = None,
 ) -> RagLead:
+    """
+    Updates status and timestamps. Saves provider message id (last one sent).
+    """
     lead.status = status
-    if last_error:
+
+    if last_error is not None:
+        # store even empty string if you want to explicitly clear
         lead.last_error = last_error
 
-    now = datetime.now(timezone.utc)
+    now = _now_utc()
     if email_user_sent:
         lead.email_user_sent_at = now
     if email_office_sent:
@@ -96,26 +109,38 @@ def update_lead_status(
 
 
 def send_confirmation_emails(db: Session, lead: RagLead) -> RagLead:
-    office_email = (lead.source and None)  # no-op; keeps lint quiet
-
-    office_email = __import__("os").getenv("OFFICE_EMAIL")
+    """
+    Sends:
+      1) User confirmation email (if lead.email exists)
+      2) Office notification email (required)
+    Status outcomes:
+      - email_sent: office email sent successfully (user email optional)
+      - failed: missing config or any send failure
+    """
+    office_email = os.getenv("OFFICE_EMAIL")
     if not office_email:
-        return update_lead_status(db, lead, status="failed", last_error="Missing OFFICE_EMAIL")
+        return update_lead_status(
+            db,
+            lead,
+            status="failed",
+            last_error="Missing OFFICE_EMAIL env var",
+        )
 
-    reply_to = __import__("os").getenv("EMAIL_REPLY_TO")
+    reply_to = os.getenv("EMAIL_REPLY_TO")  # optional
 
     # Build minimal, trustworthy email from snapshot only (DB is source of truth)
     snap = lead.selection_snapshot or {}
     title = snap.get("project_name") or snap.get("project") or "Selected option"
-    location = snap.get("location") or snap.get("interest_area") or lead.interest_area or ""
+    location = snap.get("location") or snap.get("interest_area") or (lead.interest_area or "")
 
     user_subject = "Viewing request received"
     user_html = f"""
     <p>Hi {lead.name or ""},</p>
     <p>We received your request and an agent will contact you shortly.</p>
-    <p><b>Selection:</b> {title}<br/>
-       <b>Location:</b> {location}<br/>
-       <b>Visit:</b> {lead.visit_mode or "N/A"}<br/>
+    <p>
+      <b>Selection:</b> {title}<br/>
+      <b>Location:</b> {location}<br/>
+      <b>Visit:</b> {lead.visit_mode or "N/A"}<br/>
     </p>
     <p>Thank you.</p>
     """
@@ -136,25 +161,40 @@ def send_confirmation_emails(db: Session, lead: RagLead) -> RagLead:
     </p>
     """
 
-    # Send user email first, then office email
     try:
-        provider_id_1 = ""
+        # Start: clear last_error and keep email_pending
+        lead = update_lead_status(db, lead, status="email_pending", last_error=None)
+
+        # 1) User email (optional)
         if lead.email:
-            provider_id_1 = send_email(
+            user_provider_id = send_email(
                 to_email=lead.email,
                 subject=user_subject,
                 html_content=user_html,
                 reply_to=reply_to,
             )
-            lead = update_lead_status(db, lead, status="email_pending", email_user_sent=True, provider_message_id=provider_id_1)
+            lead = update_lead_status(
+                db,
+                lead,
+                status="email_pending",
+                email_user_sent=True,
+                provider_message_id=user_provider_id or lead.email_provider_message_id,
+            )
 
-        provider_id_2 = send_email(
+        # 2) Office email (required)
+        office_provider_id = send_email(
             to_email=office_email,
             subject=office_subject,
             html_content=office_html,
             reply_to=reply_to,
         )
-        lead = update_lead_status(db, lead, status="email_sent", email_office_sent=True, provider_message_id=provider_id_2 or lead.email_provider_message_id)
+        lead = update_lead_status(
+            db,
+            lead,
+            status="email_sent",
+            email_office_sent=True,
+            provider_message_id=office_provider_id or lead.email_provider_message_id,
+        )
 
         return lead
 
