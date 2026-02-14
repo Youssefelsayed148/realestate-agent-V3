@@ -3,10 +3,10 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers.leads import router as leads_router
 
 from routers.projects import router as projects_router
 from routers.chat_router import router as chat_router
+from routers.leads import router as leads_router  # <-- keep
 
 load_dotenv()
 
@@ -27,6 +27,7 @@ app.add_middleware(
 # ---- Routes ----
 app.include_router(projects_router)
 app.include_router(chat_router)
+app.include_router(leads_router)  # ✅ <-- THIS WAS MISSING
 
 @app.get("/")
 def root():
