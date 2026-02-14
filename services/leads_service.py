@@ -4,6 +4,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from sqlalchemy.exc import IntegrityError
+import psycopg2
 
 from sqlalchemy.orm import Session
 
@@ -19,30 +21,50 @@ def _to_uuid_or_none(value: Optional[str]) -> Optional[uuid.UUID]:
     except ValueError:
         return None
 
-
 def create_lead_row(db: Session, data: Dict[str, Any]) -> RagLead:
-    lead = RagLead(
-        conversation_id=_to_uuid_or_none(data.get("conversation_id")),
-        name=data.get("name"),
-        phone=data.get("phone"),
-        email=data.get("email"),
-        preferred_contact_time=data.get("preferred_contact_time"),
-        selection_type=data.get("selection_type"),
-        interest_project_id=data.get("interest_project_id"),
-        interest_unit_id=data.get("interest_unit_id"),
-        interest_area=data.get("interest_area"),
-        selection_snapshot=data.get("selection_snapshot"),
-        visit_mode=data.get("visit_mode"),
-        preferred_visit_times=data.get("preferred_visit_times"),
-        visit_address=data.get("visit_address"),
-        status="email_pending",
-        source=data.get("source"),
-        notes=data.get("notes"),
-    )
+    def _make_lead(conversation_uuid):
+        return RagLead(
+            conversation_id=conversation_uuid,
+            name=data.get("name"),
+            phone=data.get("phone"),
+            email=data.get("email"),
+            preferred_contact_time=data.get("preferred_contact_time"),
+            selection_type=data.get("selection_type"),
+            interest_project_id=data.get("interest_project_id"),
+            interest_unit_id=data.get("interest_unit_id"),
+            interest_area=data.get("interest_area"),
+            selection_snapshot=data.get("selection_snapshot"),
+            visit_mode=data.get("visit_mode"),
+            preferred_visit_times=data.get("preferred_visit_times"),
+            visit_address=data.get("visit_address"),
+            status="email_pending",
+            source=data.get("source"),
+            notes=data.get("notes"),
+        )
+
+    conv_uuid = _to_uuid_or_none(data.get("conversation_id"))
+
+    lead = _make_lead(conv_uuid)
     db.add(lead)
-    db.commit()
-    db.refresh(lead)
-    return lead
+
+    try:
+        db.commit()
+        db.refresh(lead)
+        return lead
+
+    except IntegrityError as e:
+        db.rollback()
+
+        # If FK fails because conversation_id doesn't exist -> retry with NULL conversation_id
+        msg = str(e.orig) if getattr(e, "orig", None) else str(e)
+        if "rag_leads_conversation_id_fkey" in msg:
+            lead = _make_lead(None)
+            db.add(lead)
+            db.commit()
+            db.refresh(lead)
+            return lead
+
+        raise
 
 
 def update_lead_status(
