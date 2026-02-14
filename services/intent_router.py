@@ -17,7 +17,7 @@ def detect_intent(message: str, current_state: dict[str, Any]) -> dict[str, Any]
     if rule_intent:
         return {
             "intent": rule_intent.value,
-            "state_patch": deterministic_patch,  # ✅ key fix
+            "state_patch": deterministic_patch,
             "missing_questions": [],
         }
 

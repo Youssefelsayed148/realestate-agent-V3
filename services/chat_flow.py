@@ -1,5 +1,6 @@
 # services/chat_flow.py
 from __future__ import annotations
+
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -13,7 +14,7 @@ from services.refine import build_refine_patch
 
 from services.search import search_db
 from services.formatting import format_results, slim_results
-from services.selection import extract_option_index, format_selected
+from services.selection import resolve_choice, format_selected  # ✅ updated import
 
 # ---- "chat.py" features (moved into services) ----
 from services.projects_service import get_project_with_units, get_projects_with_units
@@ -61,17 +62,12 @@ def _extract_ids(text: str) -> List[int]:
 def _is_compare(text: str) -> bool:
     t = (text or "").lower()
 
-    # existing triggers
     if ("compare" in t) or (" vs " in t) or ("difference" in t) or ("versus" in t):
         return True
 
-    # NEW: "between X and Y" pattern (numbers)
-    # examples: "between 1 and 2", "between 3 and 5"
     if "between" in t and re.search(r"\bbetween\b.*\b\d+\b.*\band\b.*\b\d+\b", t):
         return True
 
-    # OPTIONAL (still cheap): "between A and B" (names)
-    # This helps: "between Bloomfields and Village West"
     if "between" in t and " and " in t:
         return True
 
@@ -79,12 +75,6 @@ def _is_compare(text: str) -> bool:
 
 
 def _split_compare_names(text: str) -> List[str]:
-    """
-    Very cheap parser:
-    - "Compare A vs B"
-    - "A versus B"
-    - "difference between A and B"
-    """
     t = (text or "").strip()
 
     if " vs " in t.lower() or " versus " in t.lower():
@@ -114,13 +104,10 @@ def _split_compare_names(text: str) -> List[str]:
 
 def _unit_intent(text: str) -> Optional[str]:
     t = (text or "").strip().lower()
-
     if any(k in t for k in ["largest unit", "biggest unit", "max area", "largest option"]):
         return "largest_unit"
-
     if any(k in t for k in ["cheapest", "lowest price", "min price", "cheapest unit", "cheapest option"]):
         return "cheapest_unit"
-
     return None
 
 
@@ -151,10 +138,6 @@ def _norm_name(s: str) -> str:
 
 
 def _looks_like_details_request(text: str) -> bool:
-    """
-    Prevent accidental "project name" matches:
-    Only treat as details if user asks for details explicitly.
-    """
     t = (text or "").strip().lower()
     triggers = [
         "details",
@@ -173,17 +156,12 @@ def _looks_like_details_request(text: str) -> bool:
 
 
 def _maybe_map_option_indexes(user_text: str, ids: List[int], remembered: List[int]) -> List[int]:
-    """
-    If user says 'compare 1 and 2' and we have remembered IDs in display order,
-    treat numbers as option indexes (1-based) when they fit.
-    """
     if not remembered or len(ids) < 2:
         return ids
 
     t = (user_text or "").lower()
     looks_like_option_compare = ("compare" in t) or ("between" in t) or (" vs " in t) or ("versus" in t)
 
-    # If all numbers are within 1..len(remembered), map them as indexes
     if looks_like_option_compare and all(1 <= x <= len(remembered) for x in ids[:4]):
         return [int(remembered[x - 1]) for x in ids[:4]]
 
@@ -197,7 +175,6 @@ def _search_and_respond(db: Session, conv, state: dict[str, Any]) -> dict[str, A
     try:
         results = search_db(db, state, limit=10)
     except Exception:
-        # Don't crash demo; keep conversation_id stable
         return {
             "conversation_id": str(conv.id),
             "intent": "error",
@@ -207,7 +184,6 @@ def _search_and_respond(db: Session, conv, state: dict[str, Any]) -> dict[str, A
 
     slim = slim_results(results)
 
-    # --- store last_project_ids for "compare 1 and 2" / "compare them" / "cheapest" follow-ups ---
     seen: set[int] = set()
     last_project_ids: list[int] = []
     for r in slim:
@@ -252,15 +228,13 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
 
     conv = get_or_create_conversation(db, conversation_id=conversation_id, user_id=user_id)
 
-    # conv.state should be dict; be defensive
     state = conv.state or {}
 
-    # Ensure new key exists even if old conversations existed before DEFAULT_STATE update
     if "last_project_ids" not in state:
         conv = update_conversation_state(db, conv, {"last_project_ids": []})
         state = conv.state or {}
 
-    # ✅ EARLY deterministic parse BEFORE refine/missing-slot checks
+    # ✅ EARLY deterministic parse BEFORE refine/missing-slot checks (only once)
     early_patch = extract_state_patch(user_message) or {}
     if early_patch:
         early_patch.setdefault("confirmed", False)
@@ -268,22 +242,12 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         conv = update_conversation_state(db, conv, early_patch)
         state = conv.state or {}
 
-    # =========================================================
-    # ✅ 0.5) EARLY deterministic parse (BEFORE refine + missing checks)
-    # =========================================================
-    early_patch = extract_state_patch(user_message) or {}
-    if early_patch:
-        early_patch.setdefault("confirmed", False)
-        early_patch.setdefault("chosen_option", None)
-        conv = update_conversation_state(db, conv, early_patch)
-        state = conv.state or {}
+    # 0) Choice selection (supports option index AND "id 22"/"project 22")
+    last_results = state.get("last_results") or []
+    if isinstance(last_results, list) and last_results:
+        chosen, chosen_idx, mentioned_pid = resolve_choice(user_message, last_results)
 
-    # 0) Option selection ("2", "option 2", etc.)
-    idx = extract_option_index(user_message)
-    if idx is not None:
-        last_results = state.get("last_results") or []
-        if 0 <= idx < len(last_results):
-            chosen = last_results[idx]
+        if chosen is not None and chosen_idx is not None:
             chosen_pid = chosen.get("project_id")
 
             # bump chosen project to the front of last_project_ids
@@ -312,19 +276,22 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             return {
                 "conversation_id": str(conv.id),
                 "intent": "confirm_choice",
-                "reply": format_selected(chosen, idx + 1),
+                "reply": format_selected(chosen, chosen_idx + 1),
                 "selected": chosen,
                 "state": conv.state,
             }
 
-        return {
-            "conversation_id": str(conv.id),
-            "intent": "ask_question",
-            "reply": f"I couldn’t find option {idx+1}. Please choose between 1 and {len(last_results)}.",
-            "state": state,
-        }
+        # If user explicitly mentioned a project id but it's not in last_results
+        if mentioned_pid is not None and chosen is None:
+            return {
+                "conversation_id": str(conv.id),
+                "intent": "ask_question",
+                "reply": f"I couldn’t find Project ID {mentioned_pid} in the last results. Please choose an option between 1 and {len(last_results)}.",
+                "state": state,
+            }
 
-    # 1) Refinement patch (reset / cheaper / bigger / change location, etc.)
+
+    # 1) Refinement patch
     refine_patch = build_refine_patch(user_message, state)
     if refine_patch:
         did_reset = bool(refine_patch.pop("__did_reset__", False))
@@ -337,7 +304,6 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         if compute_missing_questions(state):
             return _respond_missing(conv, state)
 
-        # user refined constraints => clear confirmation
         conv = update_conversation_state(db, conv, {"confirmed": False, "chosen_option": None})
         return _search_and_respond(db, conv, conv.state or {})
 
@@ -367,7 +333,6 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             reply = "I couldn’t find that project. Please send a valid project ID or name."
             return {"conversation_id": str(conv.id), "reply": reply, "intent": "unit_query", "state": state}
 
-        # update memory
         conv = update_conversation_state(db, conv, {"last_project_ids": [int(project["id"])]})
         state = conv.state or {}
 
@@ -385,11 +350,7 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         )
         return {"conversation_id": str(conv.id), "reply": reply, "intent": "unit_query", "state": state}
 
-    # B) Compare (UPDATED)
-            # ---------------------------------------------------------
-    # ✅ EARLY COMPARE (before parsing/refine/search)
-    # This prevents "between 1 and 3" from being treated as filters.
-    # ---------------------------------------------------------
+    # B) Compare (existing block unchanged)
     if _is_compare(user_message):
         ids: List[int] = _extract_ids(user_message)
 
@@ -404,7 +365,6 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         if len(ids) < 2:
             name_parts = _split_compare_names(user_message)
 
-            # support "between A and B"
             if not name_parts:
                 m = re.search(r"\bbetween\b\s+(.*)\s+\band\b\s+(.*)$", user_message, flags=re.IGNORECASE)
                 if m:
@@ -459,8 +419,7 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             "state": state,
         }
 
-
-    # C) Details (only if user explicitly asks for details)
+    # C) Details (existing)
     if _looks_like_details_request(user_message):
         ids = _extract_ids(user_message)
         project = None
@@ -489,7 +448,6 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
             reply = "Tell me the project name (or ID) and I’ll show details."
             return {"conversation_id": str(conv.id), "reply": reply, "intent": "details", "state": state}
 
-        # memory
         conv = update_conversation_state(db, conv, {"last_project_ids": [int(project["id"])]})
         state = conv.state or {}
 
@@ -505,7 +463,6 @@ def handle_chat_message(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     # 2) Intent detection (rules + Ollama fallback)
     intent_bundle = detect_intent(user_message, state)
 
-    # Don't let intent patch clear keys with None
     raw_intent_patch = (intent_bundle.get("state_patch") or {})
     intent_patch = {k: v for k, v in raw_intent_patch.items() if v is not None}
 

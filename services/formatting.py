@@ -1,6 +1,6 @@
 # services/formatting.py
 from __future__ import annotations
-from typing import Any
+from typing import Any, Optional
 
 
 def _to_float(v: Any) -> float | None:
@@ -16,10 +16,21 @@ def _to_int(v: Any) -> int | None:
     if v is None:
         return None
     try:
-        # handle numeric strings like "5828966" safely
         return int(float(v))
     except (TypeError, ValueError):
         return None
+
+
+def _safe_int(v: Any) -> Optional[int]:
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except Exception:
+        try:
+            return int(float(v))
+        except Exception:
+            return None
 
 
 def format_results(results: list[dict[str, Any]]) -> str:
@@ -45,21 +56,24 @@ def format_results(results: list[dict[str, Any]]) -> str:
         area_txt = f"{area_val:.0f} m²" if area_val is not None else "N/A m²"
         price_txt = f"{price_val:,} EGP" if price_val is not None else "N/A EGP"
 
-        project_id_raw = r.get("project_id")
-        project_id = int(project_id_raw) if project_id_raw is not None else None
+        project_id = _safe_int(r.get("project_id"))
 
-        # Optional: prevent duplicate projects in display (only if project_id exists)
+        # Prevent duplicate projects in display (only if project_id exists)
         if project_id is not None:
             if project_id in seen_project_ids:
                 continue
             seen_project_ids.add(project_id)
 
         shown_idx += 1
-        id_txt = f"  [ID: {project_id}]" if project_id is not None else ""
+        pid_txt = f" (Project ID: {project_id})" if project_id is not None else ""
 
+        # ✅ Explicitly label list position as "Option X"
         lines.append(
-            f"{shown_idx}) {project} ({location}) — {unit_type} — {area_txt} — {price_txt}{id_txt}"
+            f"Option {shown_idx}: {project} — {location} — {unit_type} — {area_txt} — {price_txt}{pid_txt}"
         )
+
+    lines.append("")
+    lines.append("To select: reply with **Option 1–{n}** (example: `option 4`) or **Project ID** (example: `project 22`).".format(n=shown_idx))
 
     return "\n".join(lines)
 
@@ -72,7 +86,7 @@ def slim_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for r in results:
         out.append(
             {
-                "project_id": r.get("project_id"),
+                "project_id": _safe_int(r.get("project_id")),
                 "project_name": r.get("project_name"),
                 "location": r.get("location"),
                 "unit_type": r.get("unit_type"),
